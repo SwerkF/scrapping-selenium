@@ -9,6 +9,16 @@ import time
 import undetected_chromedriver as uc
 from datetime import datetime
 import csv
+import re
+
+print("""
+ ___              _      
+|  _ \  ___   ___| |_ ___  ___  ___ _ __ __ _ _ __  
+| | | |/ _ \ / __| __/ _ \/ __|/ __| '__/ _` | '_ \ 
+| |_| | (_) | (__| || (_) \__ \ (__| | | (_| | |_) |
+|____/ \___/ \___|\__\___/|___/\___|_|  \__,_| .__/ 
+                                             |_|    
+""")
 
 # Variables globales
 availableDoctors = []
@@ -22,25 +32,121 @@ validSectors = [
 ]
 lastDoctorIndex = 0
 
+def validate_date(date_str):
+    """Valide le format de la date (JJ/MM/AAAA) et s'assure que la date est valide"""
+    try:
+        # Vérifie le format avec une regex
+        if not re.match(r'^\d{2}/\d{2}/\d{4}$', date_str):
+            return False, "Le format de la date doit être JJ/MM/AAAA"
+        
+        # Convertit en objet datetime pour vérifier la validité
+        date_obj = datetime.strptime(date_str, "%d/%m/%Y")
+        
+        # Vérifie que la date n'est pas dans le passé
+        if date_obj < datetime.now():
+            return False, "La date ne peut pas être dans le passé"
+            
+        return True, date_obj
+    except ValueError:
+        return False, "La date n'est pas valide"
+
+def validate_number(value, min_val=None, max_val=None):
+    """Valide qu'une valeur est un nombre et dans les limites spécifiées"""
+    try:
+        num = int(value)
+        if min_val is not None and num < min_val:
+            return False, f"La valeur doit être supérieure ou égale à {min_val}"
+        if max_val is not None and num > max_val:
+            return False, f"La valeur doit être inférieure ou égale à {max_val}"
+        return True, num
+    except ValueError:
+        return False, "La valeur doit être un nombre entier"
+
+def validate_consultation_type(consultation_type):
+    """Valide le type de consultation"""
+    valid_types = ["Présentiel", "Visio"]
+    if consultation_type not in valid_types:
+        return False, f"Le type de consultation doit être l'un des suivants: {', '.join(valid_types)}"
+    return True, consultation_type
+
+def get_validated_input(prompt, default_value, validation_func, *args):
+    """Demande une entrée à l'utilisateur et la valide"""
+    while True:
+        value = input(f"{prompt} [{default_value}]: ") or default_value
+        is_valid, result = validation_func(value, *args)
+        if is_valid:
+            return result
+        print(f"Erreur: {result}")
+        print("Veuillez réessayer.")
+
 # Configuration de la recherche
 print("\nConfiguration de la recherche Doctolib (appuyez sur Entrée pour les valeurs par défaut)")
 
 SEARCH_STRING = input(f"Spécialité médicale recherchée [Cardiologue]: ") or "Cardiologue"
 GEOGRAPHICAL = input(f"Localisation géographique [Paris]: ") or "Paris"
 
-NB_DOCTEURS = int(input(f"Nombre de médecins à récupérer [2]: ") or 2)
-START_DATE = input(f"Date de début de recherche (JJ/MM/AAAA) [15/01/2025]: ") or "15/01/2025"
-END_DATE = input(f"Date de fin de recherche (JJ/MM/AAAA) [23/12/2025]: ") or "23/12/2025"
+NB_DOCTEURS = get_validated_input(
+    "Nombre de médecins à récupérer",
+    "2",
+    validate_number,
+    1,  # min_val
+    100  # max_val
+)
+
+START_DATE = get_validated_input(
+    "Date de début de recherche (JJ/MM/AAAA)",
+    "20/06/2025",
+    validate_date
+)
+
+END_DATE = get_validated_input(
+    "Date de fin de recherche (JJ/MM/AAAA)",
+    "23/12/2025",
+    validate_date
+)
+
+# Vérification que la date de fin est après la date de début
+if END_DATE < START_DATE:
+    print("Erreur: La date de fin doit être après la date de début")
+    END_DATE = get_validated_input(
+        "Date de fin de recherche (JJ/MM/AAAA)",
+        "23/12/2025",
+        validate_date
+    )
 
 print("\nOptions de conventionnement disponibles:")
 for i, sector in enumerate(validSectors, 1):
     print(f"{i}. {sector}")
-sector_choice = int(input(f"Type de convention (1-6) [5]: ") or 5)
+
+sector_choice = get_validated_input(
+    "Type de convention",
+    "5",
+    validate_number,
+    1,  # min_val
+    len(validSectors)  # max_val
+)
 ASSURANCE_TYPE = validSectors[sector_choice-1]
 
-CONSULTATION_TYPE = input(f"Type de consultation (Présentiel/Visio) [Présentiel]: ") or "Présentiel"
-MAX_PRICE = int(input(f"Prix maximum de consultation [100]: ") or 100)
-MIN_PRICE = int(input(f"Prix minimum de consultation [0]: ") or 0)
+CONSULTATION_TYPE = get_validated_input(
+    "Type de consultation",
+    "Présentiel",
+    validate_consultation_type
+)
+
+MAX_PRICE = get_validated_input(
+    "Prix maximum de consultation",
+    "100",
+    validate_number,
+    0  # min_val
+)
+
+MIN_PRICE = get_validated_input(
+    "Prix minimum de consultation",
+    "0",
+    validate_number,
+    0,  # min_val
+    MAX_PRICE  # max_val
+)
 
 print("\nParamètres configurés avec succès!")
 
@@ -79,11 +185,9 @@ def convert_month(month):
 def fetch_doctors(availableDoctors):
     global lastDoctorIndex
     
-    # Défilement de la page pour mettre à jour le DOM (Afficher les calendriers)
-    driver.execute_script("window.scrollTo(0, 0)")
-    time.sleep(0.5)
+    # Un seul défilement au début pour charger tous les éléments
     driver.execute_script("window.scrollTo(0, document.body.scrollHeight)")
-    time.sleep(1)
+    time.sleep(2)  # Attente un peu plus longue pour s'assurer que tout est chargé
     
     # Récupération des éléments des médecins
     results = driver.find_elements(By.XPATH, "//div[contains(@class, 'dl-card dl-card-bg-white dl-card-variant-default dl-card-border')]")
@@ -176,67 +280,80 @@ def fetch_doctors(availableDoctors):
             # Récupération de la date du prochain rendez-vous
             try:
                 availableDate = result.find_element(By.XPATH, ".//button[contains(@class, 'dl-button')]//span[contains(text(), 'Prochain RDV')]/..")
-                date = availableDate.text.split('Prochain RDV le')[1].strip()
-                date = date.split(' ')[0] + "/" + convert_month(date.split(' ')[1]) + "/" + date.split(' ')[2]
-               
-                # Vérification si la date est dans la plage de dates
-                if datetime.strptime(date, "%d/%m/%Y").timestamp() >= datetime.strptime(START_DATE, "%d/%m/%Y").timestamp() and datetime.strptime(date, "%d/%m/%Y").timestamp() <= datetime.strptime(END_DATE, "%d/%m/%Y").timestamp():
-                   try:
-                        doctor_info['next_appointment'] = None 
+                date_text = availableDate.text.split('Prochain RDV le')[1].strip()
+                
+                # Vérification que le texte de la date est bien formaté
+                if not date_text or len(date_text.split()) != 3:
+                    print(f"DEBUG: Format de date invalide: {date_text}")
+                    continue
+                
+                # Construction de la date au format JJ/MM/AAAA
+                day = date_text.split(' ')[0]
+                month = convert_month(date_text.split(' ')[1])
+                year = date_text.split(' ')[2]
+                date_str = f"{day}/{month}/{year}"
+                
+                print(f"DEBUG: Date extraite: {date_str}")
+                
+                # Conversion des dates en objets datetime pour la comparaison
+                try:
+                    appointment_date = None
+                    start_date = None
+                    end_date = None
+                    if isinstance(date_str, datetime):
+                        appointment_date = date_str
+                    else:
+                        appointment_date = datetime.strptime(date_str, "%d/%m/%Y")
+                    print(f"DEBUG: Date du rendez-vous: {appointment_date.strftime('%d/%m/%Y')}")
+                    if isinstance(START_DATE, datetime):
+                        start_date = START_DATE
+                    else:
+                        start_date = datetime.strptime(START_DATE, "%d/%m/%Y")
+                    print(f"DEBUG: Date de début: {start_date.strftime('%d/%m/%Y')}")
+                    if isinstance(END_DATE, datetime):
+                        end_date = END_DATE
+                    else:
+                        end_date = datetime.strptime(END_DATE, "%d/%m/%Y")
+                    print(f"DEBUG: Date de fin: {end_date.strftime('%d/%m/%Y')}")
+                    
+                    print(f"DEBUG: Date du rendez-vous: {appointment_date.strftime('%d/%m/%Y')}")
+                    print(f"DEBUG: Plage de dates: {start_date.strftime('%d/%m/%Y')} - {end_date.strftime('%d/%m/%Y')}")
+                    
+                    # Vérification si la date est dans la plage de dates
+                    if start_date <= appointment_date <= end_date:
+                        try:
+                            doctor_info['next_appointment'] = None 
 
-                        # Défilement de la page pour mettre à jour le DOM (Afficher les calendriers)
-                        time.sleep(1)
-                        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", availableDate)
-                        time.sleep(1)
-                        driver.execute_script("arguments[0].click();", availableDate)
-                        time.sleep(1)
-                        
-                        # Attente que les calendriers soient chargés
-                        WebDriverWait(driver, 10).until(
-                            EC.presence_of_element_located((By.XPATH, ".//div[contains(@class, 'flex flex-1 flex-col gap-8 min-w-0')]"))
-                        )
+                            # Clic sur le bouton de rendez-vous
+                            time.sleep(1)
+                            driver.execute_script("arguments[0].click();", availableDate)
+                            time.sleep(1)
+                            
+                            # Attente que les calendriers soient chargés
+                            WebDriverWait(driver, 10).until(
+                                EC.presence_of_element_located((By.XPATH, ".//div[contains(@class, 'flex flex-1 flex-col gap-8 min-w-0')]"))
+                            )
 
                             # Récupération des tables des horaires
-                        tables = result.find_elements(By.XPATH, ".//div[contains(@class, 'flex flex-1 flex-col gap-8 min-w-0')]")
-                        for table in tables:
-                            try:
-                                # Récupération de la première date disponible
-                                first_slot = table.find_element(By.TAG_NAME, "button")
-                                time_text = first_slot.find_element(By.TAG_NAME, "span").text
-                                doctor_info['next_appointment'] = f"{date} {time_text}"
-                                break 
-                            except Exception as e:
-                                print(f"DEBUG: Erreur lors de la lecture des horaires : {e}")
-                                continue
-                   except Exception as e:
-                        print(f"DEBUG: Erreur lors du traitement du docteur : {e}")
-                else:
-                    # Si aucun rendez-vous disponible, on passe au médecin suivant
-                    doctor_info['next_appointment'] = None
-                        
-                    # Défilement de la page pour mettre à jour le DOM (Afficher les calendriers)
-                    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", availableDate)
-                    time.sleep(1)
-                    driver.execute_script("arguments[0].click();", availableDate)
-                    time.sleep(1)
-                    
-                    # Attente que les calendriers soient chargés
-                    WebDriverWait(driver, 10).until(
-                        EC.presence_of_element_located((By.XPATH, ".//div[contains(@class, 'flex flex-1 flex-col gap-8 min-w-0')]"))
-                    )
-                    
-                    # Récupération des tables des horaires
-                    tables = result.find_elements(By.XPATH, ".//div[contains(@class, 'flex flex-1 flex-col gap-8 min-w-0')]")
-                    for table in tables:
-                        try:
-                            # Récupération de la première date disponible
-                            first_slot = table.find_element(By.TAG_NAME, "button")
-                            time_text = first_slot.find_element(By.TAG_NAME, "span").text
-                            doctor_info['next_appointment'] = f"{date} {time_text}"
-                            break 
+                            tables = result.find_elements(By.XPATH, ".//div[contains(@class, 'flex flex-1 flex-col gap-8 min-w-0')]")
+                            for table in tables:
+                                try:
+                                    # Récupération de la première date disponible
+                                    first_slot = table.find_element(By.TAG_NAME, "button")
+                                    time_text = first_slot.find_element(By.TAG_NAME, "span").text
+                                    doctor_info['next_appointment'] = f"{date_str} {time_text}"
+                                    break 
+                                except Exception as e:
+                                    print(f"DEBUG: Erreur lors de la lecture des horaires : {e}")
+                                    continue
                         except Exception as e:
-                            print(f"DEBUG: Erreur lors de la lecture des horaires : {e}")
-                            continue
+                            print(f"DEBUG: Erreur lors du traitement du docteur : {e}")
+                    else:
+                        print(f"DEBUG: Date hors plage ({date_str}), passage au médecin suivant")
+                        continue
+                except ValueError as e:
+                    print(f"DEBUG: Erreur de conversion de date: {e}")
+                    continue
         
             except Exception as e:
                 print(f"DEBUG: Erreur lors de la récupération de la date: {e}")
@@ -273,7 +390,7 @@ def alt_fetch_doctor_prices(doctor):
     try:
         print(f"DEBUG: Visite de la page du médecin: {doctor['href']}")
         driver.get(doctor['href'])
-        time.sleep(3)
+        time.sleep(1)
 
         # Attente que la page soit chargée
         WebDriverWait(driver, 10).until(
@@ -344,7 +461,7 @@ def alt_fetch_doctor_prices(doctor):
             # Retour à la page de recherche
             print(f"DEBUG: Retour à la page de recherche: {current_url}")
             driver.get(current_url)
-            time.sleep(3)
+            time.sleep(1)
             WebDriverWait(driver, 10).until(
                 EC.presence_of_element_located((By.XPATH, "//div[contains(@class, 'dl-card dl-card-bg-white dl-card-variant-default dl-card-border')]"))
             )
@@ -414,7 +531,7 @@ try:
         if page_completed:
             print(f"DEBUG: Page actuelle complètement traitée, tentative de passage à la page suivante")
             try:
-                time.sleep(3)
+                time.sleep(1)
 
                 # Attente que le bouton de passage à la page suivante soit présent
                 next_page = WebDriverWait(driver, 10).until(
@@ -435,7 +552,7 @@ try:
                     print("DEBUG: Utilisation de JavaScript pour cliquer sur 'Page suivante'")
                     driver.execute_script("arguments[0].click();", next_page)
                     
-                time.sleep(3)
+                time.sleep(1)
                 print("DEBUG: Passage à la page suivante réussi")
                 
             except Exception as e:
@@ -454,23 +571,47 @@ try:
     # Exportation des résultats dans un fichier CSV
     with open('docteurs.csv', 'w', newline='', encoding='utf-8') as file:
         fieldnames = ['name', 'sector', 'address', 'next_appointment', 'prices', 'href', 'consultation_type']
-        writer = csv.DictWriter(file, fieldnames=fieldnames)
+        writer = csv.DictWriter(file, fieldnames=fieldnames, delimiter=';', quoting=csv.QUOTE_ALL)
         writer.writeheader()
+        
         for doctor in availableDoctors:
             doctor_data = doctor.copy()
             
+            # Nettoyage et formatage des données
             if isinstance(doctor_data.get('prices'), list):
-                doctor_data['prices'] = ' | '.join(doctor_data['prices'])
+                # Formatage des prix pour plus de lisibilité
+                formatted_prices = []
+                for price in doctor_data['prices']:
+                    if '€' in price:
+                        formatted_prices.append(price.strip())
+                doctor_data['prices'] = ' | '.join(formatted_prices)
             elif doctor_data.get('prices') is None:
                 doctor_data['prices'] = "Non communiqués"
                 
+            # Nettoyage de l'adresse
+            if doctor_data.get('address'):
+                # Suppression des doublons de secteur dans l'adresse
+                address = doctor_data['address']
+                if doctor_data.get('sector') and doctor_data['sector'] in address:
+                    address = address.replace(doctor_data['sector'], '').strip()
+                doctor_data['address'] = address
+                
+            # Nettoyage du type de consultation
+            if not doctor_data.get('consultation_type'):
+                doctor_data['consultation_type'] = "Présentiel"
+                
+            # Nettoyage du rendez-vous
+            if not doctor_data.get('next_appointment'):
+                doctor_data['next_appointment'] = "Non disponible"
+                
+            # S'assurer que tous les champs sont présents
             for field in fieldnames:
-                if field not in doctor_data:
+                if field not in doctor_data or doctor_data[field] is None:
                     doctor_data[field] = ""
                     
             writer.writerow(doctor_data)
             
-    print("Les résultats ont été exportés dans docteurs.csv")
+    print("\nLes résultats ont été exportés dans docteurs.csv")
     print(f"Nombre de médecins exportés : {len(availableDoctors)}")
     
 except Exception as e:
