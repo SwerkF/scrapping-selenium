@@ -1,0 +1,4 @@
+selenium
+undetected-chromedriver
+python-dateutil
+setuptools
